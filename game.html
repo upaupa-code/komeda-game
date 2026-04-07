@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>コメダキャッチゲーム</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #3b1a0a;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      font-family: 'Hiragino Kaku Gothic ProN', sans-serif;
+      overflow: hidden;
+    }
+    #gameContainer {
+      position: relative;
+    }
+    canvas {
+      display: block;
+      border: 4px solid #c8860a;
+      border-radius: 8px;
+      background: #fdf6e3;
+    }
+    #ui {
+      width: 480px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 12px;
+      background: #c8860a;
+      border-radius: 8px 8px 0 0;
+      color: white;
+      font-size: 15px;
+      font-weight: bold;
+    }
+    #ui span { text-shadow: 1px 1px 2px rgba(0,0,0,0.5); }
+    #overlay {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      background: rgba(0,0,0,0.75);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      border-radius: 0 0 6px 6px;
+    }
+    #overlay h1 {
+      color: #ffd700;
+      font-size: 36px;
+      margin-bottom: 16px;
+      text-shadow: 2px 2px 4px black;
+    }
+    #overlay p {
+      color: white;
+      font-size: 16px;
+      margin-bottom: 8px;
+      text-align: center;
+      line-height: 1.8;
+    }
+    #startBtn {
+      margin-top: 20px;
+      padding: 12px 40px;
+      font-size: 20px;
+      font-weight: bold;
+      background: #c8860a;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    #startBtn:hover { background: #e09a12; }
+  </style>
+</head>
+<body>
+<div id="gameContainer">
+  <div id="ui">
+    <span id="scoreUI">スコア: 0</span>
+    <span id="levelUI">Lv.1</span>
+    <span id="missUI">ミス: ❤️❤️❤️</span>
+  </div>
+  <canvas id="canvas" width="480" height="600"></canvas>
+  <div id="overlay">
+    <h1>☕ コメダ<br>キャッチゲーム</h1>
+    <p>
+      コーヒーカップで <b style="color:#ffd700">コメダ</b> をキャッチしよう！<br>
+      コメダ以外を <b style="color:#ff6666">3回</b> 取るとゲームオーバー<br>
+      <b style="color:#aaffaa">10個</b> キャッチするとスピードアップ！<br>
+      <b style="color:#88eeff">ウーパー</b> を取るとミスが1回回復！
+    </p>
+    <p style="font-size:13px; color:#ccc">← → キー または マウスで操作</p>
+    <button id="startBtn">スタート！</button>
+  </div>
+</div>
+
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const overlay = document.getElementById('overlay');
+const startBtn = document.getElementById('startBtn');
+const scoreUI = document.getElementById('scoreUI');
+const levelUI = document.getElementById('levelUI');
+const missUI = document.getElementById('missUI');
+
+const W = canvas.width, H = canvas.height;
+const MAX_MISS = 3;
+const SPEED_UP_EVERY = 10;
+
+// Images
+const imgFiles = {
+  cup:    'cafe_coffee_cup.png',
+  komeda1:'コメダ.png',
+  komeda2:'コメダ (2).png',
+  uper:   'ウーパー.png',
+  staba:  'スタバ (1).png',
+  tullys: 'タリーズ.png',
+  dotour: 'ドトール (1).png',
+  konada: 'コナダ.png',
+  komada: 'コマダ (1).png',
+  kometa: 'コメタ.png',
+  sunaba: 'スナバ.png',
+};
+
+const imgs = {};
+let loadedCount = 0;
+const totalImgs = Object.keys(imgFiles).length;
+
+function loadImages(cb) {
+  for (const [key, file] of Object.entries(imgFiles)) {
+    const img = new Image();
+    img.src = encodeURIComponent(file).replace(/%20/g, ' ');
+    img.onload = () => { loadedCount++; if (loadedCount === totalImgs) cb(); };
+    img.onerror = () => { loadedCount++; if (loadedCount === totalImgs) cb(); };
+    imgs[key] = img;
+  }
+}
+
+// Item definitions
+const KOMEDA_ITEMS = ['komeda1', 'komeda2'];
+const BAD_ITEMS    = ['staba', 'tullys', 'dotour', 'konada', 'komada', 'kometa', 'sunaba'];
+const UPER_ITEM    = 'uper';
+
+// Weighted pool: コメダ多め、ウーパーレア
+function randomItemKey() {
+  const r = Math.random();
+  if (r < 0.40) return KOMEDA_ITEMS[Math.floor(Math.random() * KOMEDA_ITEMS.length)];
+  if (r < 0.43) return UPER_ITEM;
+  return BAD_ITEMS[Math.floor(Math.random() * BAD_ITEMS.length)];
+}
+
+// Audio
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+function playSound(type) {
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  if (type === 'komeda') {
+    // 明るい上昇音
+    [[523, 0], [659, 0.08], [784, 0.16]].forEach(([freq, delay]) => {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.connect(gain); gain.connect(audioCtx.destination);
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+      const t = audioCtx.currentTime + delay;
+      gain.gain.setValueAtTime(0.3, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.18);
+      osc.start(t); osc.stop(t + 0.18);
+    });
+  } else if (type === 'miss') {
+    // 低い下降ブザー
+    [[330, 0], [220, 0.1]].forEach(([freq, delay]) => {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.connect(gain); gain.connect(audioCtx.destination);
+      osc.type = 'sawtooth';
+      osc.frequency.value = freq;
+      const t = audioCtx.currentTime + delay;
+      gain.gain.setValueAtTime(0.25, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.22);
+      osc.start(t); osc.stop(t + 0.22);
+    });
+  } else if (type === 'uper') {
+    // キラキラ音
+    [[880, 0], [1046, 0.07], [1318, 0.14]].forEach(([freq, delay]) => {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.connect(gain); gain.connect(audioCtx.destination);
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+      const t = audioCtx.currentTime + delay;
+      gain.gain.setValueAtTime(0.2, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.2);
+      osc.start(t); osc.stop(t + 0.2);
+    });
+  } else if (type === 'levelup') {
+    // レベルアップ fanfare
+    [[523,0],[659,0.1],[784,0.2],[1046,0.3]].forEach(([freq, delay]) => {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.connect(gain); gain.connect(audioCtx.destination);
+      osc.type = 'square';
+      osc.frequency.value = freq;
+      const t = audioCtx.currentTime + delay;
+      gain.gain.setValueAtTime(0.18, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.25);
+      osc.start(t); osc.stop(t + 0.25);
+    });
+  }
+}
+
+// Game state
+let state;
+let keys = {};
+let mouseX = null;
+let animId = null;
+let lastSpawn = 0;
+let spawnInterval = 1400; // ms
+
+function initState() {
+  state = {
+    cup: { x: W / 2, y: H - 60, w: 72, h: 72 },
+    items: [],
+    score: 0,
+    miss: 0,
+    level: 1,
+    komedaCaught: 0,
+    running: false,
+    gameOver: false,
+    baseSpeed: 2.5,
+    speed: 2.5,
+    flashMsg: null,
+    flashTimer: 0,
+  };
+}
+
+function startGame() {
+  initState();
+  state.running = true;
+  overlay.style.display = 'none';
+  lastSpawn = performance.now();
+  cancelAnimationFrame(animId);
+  loop(performance.now());
+}
+
+startBtn.addEventListener('click', () => {
+  loadImages(startGame);
+  startBtn.disabled = true;
+  startBtn.textContent = '読み込み中...';
+});
+
+// Controls
+document.addEventListener('keydown', e => { keys[e.key] = true; });
+document.addEventListener('keyup',   e => { keys[e.key] = false; });
+canvas.addEventListener('mousemove', e => {
+  const rect = canvas.getBoundingClientRect();
+  mouseX = e.clientX - rect.left;
+});
+
+function spawnItem(now) {
+  const count = 2 + Math.floor(Math.random() * 2); // 2〜3個同時
+  const size = 56;
+  for (let i = 0; i < count; i++) {
+    const key = randomItemKey();
+    const x = size / 2 + Math.random() * (W - size);
+    const yOffset = i * -(size * 0.6); // 少しずらして重ならないように
+    state.items.push({ key, x, y: -size + yOffset, size, speed: state.speed + (Math.random() - 0.5) * 0.8 });
+  }
+  lastSpawn = now;
+}
+
+function updateUI() {
+  scoreUI.textContent = `スコア: ${state.score}`;
+  levelUI.textContent = `Lv.${state.level}`;
+  const hearts = '❤️'.repeat(MAX_MISS - state.miss) + '🖤'.repeat(state.miss);
+  missUI.textContent = `ミス: ${hearts}`;
+}
+
+function showFlash(msg, color) {
+  state.flashMsg = { text: msg, color };
+  state.flashTimer = 90;
+}
+
+function loop(now) {
+  if (!state.running) return;
+  update(now);
+  draw();
+  animId = requestAnimationFrame(loop);
+}
+
+function update(now) {
+  const cup = state.cup;
+  const spd = 5;
+
+  // Cup movement
+  if (mouseX !== null) {
+    cup.x += (mouseX - cup.x) * 0.18;
+  }
+  if (keys['ArrowLeft']  || keys['a'] || keys['A']) cup.x -= spd;
+  if (keys['ArrowRight'] || keys['d'] || keys['D']) cup.x += spd;
+  cup.x = Math.max(cup.w / 2, Math.min(W - cup.w / 2, cup.x));
+
+  // Spawn
+  if (now - lastSpawn > spawnInterval) {
+    spawnItem(now);
+  }
+
+  // Move items
+  for (let i = state.items.length - 1; i >= 0; i--) {
+    const item = state.items[i];
+    item.y += item.speed;
+
+    // Check catch
+    const dx = Math.abs(item.x - cup.x);
+    const dy = Math.abs(item.y - (cup.y + cup.h * 0.1));
+    if (dx < (cup.w * 0.45 + item.size * 0.35) && dy < (cup.h * 0.3 + item.size * 0.3)) {
+      // Caught!
+      state.items.splice(i, 1);
+
+      if (KOMEDA_ITEMS.includes(item.key)) {
+        state.score += 10;
+        state.komedaCaught++;
+        playSound('komeda');
+        showFlash('+10 コメダ！', '#c8860a');
+
+        // Level up every SPEED_UP_EVERY catches
+        if (state.komedaCaught % SPEED_UP_EVERY === 0) {
+          state.level++;
+          state.speed = state.baseSpeed + (state.level - 1) * 0.8;
+          spawnInterval = Math.max(600, 1400 - (state.level - 1) * 120);
+          playSound('levelup');
+          showFlash(`⬆ Lv.${state.level} スピードアップ！`, '#ff9900');
+        }
+      } else if (item.key === UPER_ITEM) {
+        if (state.miss > 0) {
+          state.miss--;
+          showFlash('ウーパー！ミス回復！', '#44ccff');
+        } else {
+          showFlash('ウーパー！(ミスなし)', '#44ccff');
+        }
+        playSound('uper');
+      } else {
+        // Bad item
+        state.miss++;
+        playSound('miss');
+        showFlash('コメダじゃない！', '#ff4444');
+        if (state.miss >= MAX_MISS) {
+          endGame();
+          return;
+        }
+      }
+      continue;
+    }
+
+    // Off screen
+    if (item.y > H + item.size) {
+      state.items.splice(i, 1);
+    }
+  }
+
+  if (state.flashTimer > 0) state.flashTimer--;
+  updateUI();
+}
+
+function endGame() {
+  state.running = false;
+  state.gameOver = true;
+  overlay.style.display = 'flex';
+  overlay.innerHTML = `
+    <h1>ゲームオーバー</h1>
+    <p style="font-size:22px; color:#ffd700; margin-bottom:8px">スコア: <b>${state.score}</b></p>
+    <p>レベル: ${state.level} &nbsp;|&nbsp; キャッチ数: ${state.komedaCaught}</p>
+    <button id="startBtn" style="margin-top:24px;padding:12px 40px;font-size:20px;font-weight:bold;background:#c8860a;color:white;border:none;border-radius:8px;cursor:pointer;">
+      もう一度！
+    </button>
+  `;
+  document.getElementById('startBtn').addEventListener('click', startGame);
+}
+
+function draw() {
+  ctx.clearRect(0, 0, W, H);
+
+  // Background pattern
+  ctx.fillStyle = '#fdf6e3';
+  ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = 'rgba(200,134,10,0.05)';
+  for (let y = 0; y < H; y += 40) {
+    for (let x = 0; x < W; x += 40) {
+      ctx.fillRect(x, y, 20, 20);
+    }
+  }
+
+  // Items
+  for (const item of state.items) {
+    const img = imgs[item.key];
+    if (img && img.complete && img.naturalWidth) {
+      ctx.drawImage(img, item.x - item.size / 2, item.y - item.size / 2, item.size, item.size);
+    } else {
+      ctx.fillStyle = '#aaa';
+      ctx.fillRect(item.x - item.size / 2, item.y - item.size / 2, item.size, item.size);
+    }
+    // Label
+    ctx.font = 'bold 10px sans-serif';
+    ctx.fillStyle = '#333';
+    ctx.textAlign = 'center';
+    const label = item.key === 'uper' ? 'ウーパー' : item.key.replace('komeda1','コメダ').replace('komeda2','コメダ');
+    // (skip label for cleanliness)
+  }
+
+  // Cup
+  const cup = state.cup;
+  const cupImg = imgs.cup;
+  if (cupImg && cupImg.complete && cupImg.naturalWidth) {
+    ctx.drawImage(cupImg, cup.x - cup.w / 2, cup.y - cup.h / 2, cup.w, cup.h);
+  } else {
+    ctx.fillStyle = '#c8860a';
+    ctx.fillRect(cup.x - cup.w / 2, cup.y - cup.h / 2, cup.w, cup.h);
+  }
+
+  // Flash message
+  if (state.flashMsg && state.flashTimer > 0) {
+    const alpha = Math.min(1, state.flashTimer / 20);
+    ctx.globalAlpha = alpha;
+    ctx.font = 'bold 26px sans-serif';
+    ctx.fillStyle = state.flashMsg.color;
+    ctx.strokeStyle = 'white';
+    ctx.lineWidth = 4;
+    ctx.textAlign = 'center';
+    ctx.strokeText(state.flashMsg.text, W / 2, H / 2 - 40);
+    ctx.fillText(state.flashMsg.text, W / 2, H / 2 - 40);
+    ctx.globalAlpha = 1;
+  }
+}
+
+// Initial draw
+(function() {
+  ctx.fillStyle = '#fdf6e3';
+  ctx.fillRect(0, 0, W, H);
+})();
+</script>
+</body>
+</html>
