@@ -2,6 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>コメダキャッチゲーム</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -85,15 +86,23 @@
   </div>
   <canvas id="canvas" width="480" height="600"></canvas>
   <div id="overlay">
-    <h1>☕ コメダ<br>キャッチゲーム</h1>
-    <p>
-      コーヒーカップで <b style="color:#ffd700">コメダ</b> をキャッチしよう！<br>
-      コメダ以外を <b style="color:#ff6666">3回</b> 取るとゲームオーバー<br>
-      <b style="color:#aaffaa">10個</b> キャッチするとスピードアップ！<br>
-      <b style="color:#88eeff">ウーパー</b> を取るとミスが1回回復！
-    </p>
-    <p style="font-size:13px; color:#ccc">← → キー または マウスで操作</p>
-    <button id="startBtn">スタート！</button>
+    <div id="startScreen" style="display:flex; flex-direction:column; align-items:center;">
+      <h1>☕ コメダ<br>キャッチゲーム</h1>
+      <p>
+        コーヒーカップで <b style="color:#ffd700">コメダ</b> をキャッチしよう！<br>
+        コメダ以外を <b style="color:#ff6666">3回</b> 取るとゲームオーバー<br>
+        <b style="color:#aaffaa">10個</b> キャッチするとスピードアップ！<br>
+        <b style="color:#88eeff">ウーパー</b> を取るとミスが1回回復！
+      </p>
+      <p style="font-size:13px; color:#ccc">← → キー または マウス・タッチで操作</p>
+      <button id="startBtn">スタート！</button>
+    </div>
+    <div id="gameOverScreen" style="display:none; flex-direction:column; align-items:center;">
+      <h1>ゲームオーバー</h1>
+      <p id="finalScore" style="font-size:22px; color:#ffd700; margin-bottom:8px"></p>
+      <p id="finalStats"></p>
+      <button id="retryBtn" style="margin-top:24px;padding:12px 40px;font-size:20px;font-weight:bold;background:#c8860a;color:white;border:none;border-radius:8px;cursor:pointer;">もう一度！</button>
+    </div>
   </div>
 </div>
 
@@ -130,9 +139,10 @@ let loadedCount = 0;
 const totalImgs = Object.keys(imgFiles).length;
 
 function loadImages(cb) {
+  loadedCount = 0;
   for (const [key, file] of Object.entries(imgFiles)) {
     const img = new Image();
-    img.src = encodeURIComponent(file).replace(/%20/g, ' ');
+    img.src = file;
     img.onload = () => { loadedCount++; if (loadedCount === totalImgs) cb(); };
     img.onerror = () => { loadedCount++; if (loadedCount === totalImgs) cb(); };
     imgs[key] = img;
@@ -152,10 +162,15 @@ function randomItemKey() {
   return BAD_ITEMS[Math.floor(Math.random() * BAD_ITEMS.length)];
 }
 
-// Audio
-const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+// Audio (lazily initialized after user interaction)
+let audioCtx = null;
+function getAudioCtx() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  return audioCtx;
+}
 
 function playSound(type) {
+  const audioCtx = getAudioCtx();
   if (audioCtx.state === 'suspended') audioCtx.resume();
   if (type === 'komeda') {
     // 明るい上昇音
@@ -218,9 +233,10 @@ let keys = {};
 let mouseX = null;
 let animId = null;
 let lastSpawn = 0;
-let spawnInterval = 1400; // ms
+let spawnInterval = 1400; // ms (reset in initState)
 
 function initState() {
+  spawnInterval = 1400;
   state = {
     cup: { x: W / 2, y: H - 60, w: 72, h: 72 },
     items: [],
@@ -241,8 +257,11 @@ function startGame() {
   initState();
   state.running = true;
   overlay.style.display = 'none';
+  document.getElementById('startScreen').style.display = 'flex';
+  document.getElementById('gameOverScreen').style.display = 'none';
   lastSpawn = performance.now();
   cancelAnimationFrame(animId);
+  animId = null;
   loop(performance.now());
 }
 
@@ -251,6 +270,7 @@ startBtn.addEventListener('click', () => {
   startBtn.disabled = true;
   startBtn.textContent = '読み込み中...';
 });
+document.getElementById('retryBtn').addEventListener('click', startGame);
 
 // Controls
 document.addEventListener('keydown', e => { keys[e.key] = true; });
@@ -259,6 +279,16 @@ canvas.addEventListener('mousemove', e => {
   const rect = canvas.getBoundingClientRect();
   mouseX = e.clientX - rect.left;
 });
+canvas.addEventListener('touchmove', e => {
+  e.preventDefault();
+  const rect = canvas.getBoundingClientRect();
+  mouseX = e.touches[0].clientX - rect.left;
+}, { passive: false });
+canvas.addEventListener('touchstart', e => {
+  e.preventDefault();
+  const rect = canvas.getBoundingClientRect();
+  mouseX = e.touches[0].clientX - rect.left;
+}, { passive: false });
 
 function spawnItem(now) {
   const count = 2 + Math.floor(Math.random() * 2); // 2〜3個同時
@@ -368,16 +398,14 @@ function update(now) {
 function endGame() {
   state.running = false;
   state.gameOver = true;
+  cancelAnimationFrame(animId);
+  animId = null;
+  document.getElementById('startScreen').style.display = 'none';
+  const gameOverScreen = document.getElementById('gameOverScreen');
+  gameOverScreen.style.display = 'flex';
+  document.getElementById('finalScore').textContent = `スコア: ${state.score}`;
+  document.getElementById('finalStats').textContent = `レベル: ${state.level}  |  キャッチ数: ${state.komedaCaught}`;
   overlay.style.display = 'flex';
-  overlay.innerHTML = `
-    <h1>ゲームオーバー</h1>
-    <p style="font-size:22px; color:#ffd700; margin-bottom:8px">スコア: <b>${state.score}</b></p>
-    <p>レベル: ${state.level} &nbsp;|&nbsp; キャッチ数: ${state.komedaCaught}</p>
-    <button id="startBtn" style="margin-top:24px;padding:12px 40px;font-size:20px;font-weight:bold;background:#c8860a;color:white;border:none;border-radius:8px;cursor:pointer;">
-      もう一度！
-    </button>
-  `;
-  document.getElementById('startBtn').addEventListener('click', startGame);
 }
 
 function draw() {
