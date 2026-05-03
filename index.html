@@ -294,8 +294,7 @@ function initState() {
 function startGame() {
   initState();
   state.running = true;
-  bgm.currentTime = 0;
-  bgm.play();
+  bgm.pause();
   retireBtn.style.display = 'block';
   overlay.style.display = 'none';
   document.getElementById('startScreen').style.display = 'flex';
@@ -307,6 +306,8 @@ function startGame() {
 }
 
 startBtn.addEventListener('click', () => {
+  bgm.currentTime = 0;
+  bgm.play();
   loadImages(startGame);
   startBtn.disabled = true;
   startBtn.textContent = '読み込み中...';
@@ -439,7 +440,8 @@ function update(now) {
 function endGame(retired = false) {
   state.running = false;
   state.gameOver = true;
-  bgm.pause();
+  bgm.currentTime = 0;
+  bgm.play();
   retireBtn.style.display = 'none';
   cancelAnimationFrame(animId);
   animId = null;
